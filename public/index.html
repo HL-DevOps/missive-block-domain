@@ -6,7 +6,7 @@
   <meta name="viewport"
         content="width=device-width, initial-scale=1">
 
-  <title>Block Domain - Cloudflare Gateway</title>
+  <title>Domain Management - Cloudflare Gateway</title>
 
   <style>
     body {
@@ -59,7 +59,36 @@
 
     button:disabled {
       opacity: .6;
-      cursor: wait;
+      cursor: not-allowed;
+    }
+
+    .action-selector {
+      display: flex;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .action-button {
+      margin-top: 0;
+      background: #e2e8f0;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+    }
+
+    .action-button.active.block {
+      background: #dc2626;
+      color: white;
+      border-color: #dc2626;
+    }
+
+    .action-button.active.unblock {
+      background: #17008B;
+      color: white;
+      border-color: #17008B;
+    }
+
+    .submit-button.unblock {
+      background: #17008B;
     }
 
     #status {
@@ -87,6 +116,17 @@
     .description {
       font-size: 13px;
       color: #64748b;
+      line-height: 1.5;
+    }
+
+    .notice {
+      margin-top: 14px;
+      padding: 12px;
+      background: #f1f5f9;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #475569;
+      line-height: 1.5;
     }
   </style>
 </head>
@@ -94,16 +134,39 @@
 <body>
   <div class="container">
 
-    <h2>Block Domain</h2>
+    <h2 id="pageTitle">Block Domain</h2>
 
-    <p class="description">
+    <p class="description" id="description">
       Add a domain to the company Cloudflare
       Gateway DNS blocklist.
     </p>
 
-    <form id="blockForm">
+    <div class="action-selector"
+         role="group"
+         aria-label="Domain action">
+
+      <button
+        id="selectBlock"
+        type="button"
+        class="action-button active block"
+        aria-pressed="true">
+        Block Domain
+      </button>
+
+      <button
+        id="selectUnblock"
+        type="button"
+        class="action-button"
+        aria-pressed="false">
+        Unblock Domain
+      </button>
+
+    </div>
+
+    <form id="domainForm">
 
       <label for="domain">Domain</label>
+
       <input
         id="domain"
         type="text"
@@ -114,7 +177,8 @@
       >
 
       <label for="reason">Reason</label>
-      <select id="reason">
+
+      <select id="reason" required>
         <option>Phishing</option>
         <option>Malware</option>
         <option>Spam</option>
@@ -122,7 +186,16 @@
         <option>Other</option>
       </select>
 
-      <button id="blockButton" type="submit">
+      <div
+        class="notice"
+        id="actionNotice"
+        hidden>
+      </div>
+
+      <button
+        id="submitButton"
+        class="submit-button"
+        type="submit">
         Block Domain
       </button>
 
@@ -131,19 +204,142 @@
     <div
       id="status"
       role="status"
-      aria-live="polite"
-    ></div>
+      aria-live="polite">
+    </div>
 
   </div>
 
   <script>
-    const form = document.getElementById("blockForm");
+    const form = document.getElementById("domainForm");
     const status = document.getElementById("status");
-    const button = document.getElementById("blockButton");
+    const button = document.getElementById("submitButton");
+
+    const pageTitle =
+      document.getElementById("pageTitle");
+
+    const description =
+      document.getElementById("description");
+
+    const reasonSelect =
+      document.getElementById("reason");
+
+    const blockSelector =
+      document.getElementById("selectBlock");
+
+    const unblockSelector =
+      document.getElementById("selectUnblock");
+
+    const actionNotice =
+      document.getElementById("actionNotice");
+
+    // Enable only after the secure unblock
+    // backend and n8n workflow are tested.
+    const UNBLOCK_ENABLED = false;
+
+    let currentAction = "block";
+    let submitting = false;
+
+    const reasons = {
+      block: [
+        "Phishing",
+        "Malware",
+        "Spam",
+        "Company policy",
+        "Other"
+      ],
+      unblock: [
+        "False positive",
+        "Approved by InfoSec",
+        "No longer a threat",
+        "Other"
+      ]
+    };
 
     function showStatus(message, type = "pending") {
       status.className = type;
       status.textContent = message;
+    }
+
+    function updateReasons(action) {
+      reasonSelect.replaceChildren();
+
+      for (const reason of reasons[action]) {
+        const option = document.createElement("option");
+        option.value = reason;
+        option.textContent = reason;
+        reasonSelect.appendChild(option);
+      }
+    }
+
+    function selectAction(action) {
+      if (submitting) {
+        return;
+      }
+
+      currentAction = action;
+
+      const isBlock = action === "block";
+
+      pageTitle.textContent =
+        isBlock ? "Block Domain" : "Unblock Domain";
+
+      description.textContent = isBlock
+        ? "Add a domain to the company Cloudflare Gateway DNS blocklist."
+        : "Remove a domain from the dedicated Blocked by Automation list.";
+
+      blockSelector.classList.toggle(
+        "active", isBlock
+      );
+
+      unblockSelector.classList.toggle(
+        "active", !isBlock
+      );
+
+      blockSelector.classList.toggle(
+        "block", isBlock
+      );
+
+      unblockSelector.classList.toggle(
+        "unblock", !isBlock
+      );
+
+      blockSelector.setAttribute(
+        "aria-pressed", String(isBlock)
+      );
+
+      unblockSelector.setAttribute(
+        "aria-pressed", String(!isBlock)
+      );
+
+      button.textContent = isBlock
+        ? "Block Domain"
+        : "Unblock Domain";
+
+      button.classList.toggle(
+        "unblock", !isBlock
+      );
+
+      updateReasons(action);
+
+      actionNotice.hidden = isBlock;
+
+      if (!isBlock) {
+        actionNotice.textContent =
+          "Unblocking removes an exact domain entry only from the dedicated Blocked by Automation list. Other Cloudflare security controls are not modified.";
+      }
+
+      button.disabled =
+        !isBlock && !UNBLOCK_ENABLED;
+
+      if (!isBlock && !UNBLOCK_ENABLED) {
+        showStatus(
+          "Unblock functionality is being configured. " +
+          "Requests are not enabled yet.",
+          "warning"
+        );
+      } else {
+        showStatus("");
+      }
     }
 
     function normalizeDomain(input) {
@@ -179,83 +375,160 @@
       return domain;
     }
 
-    form.addEventListener("submit", async function(event) {
-      event.preventDefault();
+    blockSelector.addEventListener(
+      "click",
+      () => selectAction("block")
+    );
 
-      if (button.disabled) {
-        return;
-      }
+    unblockSelector.addEventListener(
+      "click",
+      () => selectAction("unblock")
+    );
 
-      try {
-        const domain = normalizeDomain(
-          document.getElementById("domain").value
-        );
+    form.addEventListener(
+      "submit",
+      async function(event) {
+        event.preventDefault();
 
-        const reason =
-          document.getElementById("reason").value;
-
-        if (!confirm("Block " + domain + "?")) {
+        if (submitting) {
           return;
         }
 
-        button.disabled = true;
-        showStatus("Submitting request...", "pending");
-
-        const response = await fetch("/api/block-domain", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            domain,
-            reason,
-            source: "missive"
-          })
-        });
-
-        let result;
-
-        try {
-          result = await response.json();
-        } catch {
-          throw new Error(
-            "The server returned an invalid response."
-          );
-        }
+        const action = currentAction;
 
         if (
-          !response.ok ||
-          result.success !== true ||
-          result.blocked !== true
+          action === "unblock" &&
+          !UNBLOCK_ENABLED
         ) {
-          throw new Error(
-            result.message ||
-            "Domain blocking could not be confirmed."
-          );
-        }
-
-        if (result.alreadyBlocked === true) {
           showStatus(
-            domain + " is already in the Cloudflare block list.",
+            "Unblock functionality is not enabled yet.",
             "warning"
           );
-        } else {
-          showStatus(
-            domain + " was successfully added to Cloudflare Zero Trust.",
-            "success"
-          );
+          return;
         }
 
-      } catch (error) {
-        showStatus(
-          "Error: " + error.message,
-          "error"
-        );
-      } finally {
-        button.disabled = false;
+        try {
+          const domain = normalizeDomain(
+            document.getElementById("domain").value
+          );
+
+          const reason = reasonSelect.value;
+
+          const actionLabel = action === "block"
+            ? "Block"
+            : "Unblock";
+
+          if (
+            !confirm(
+              actionLabel + " " + domain + "?"
+            )
+          ) {
+            return;
+          }
+
+          submitting = true;
+          button.disabled = true;
+
+          showStatus(
+            "Submitting request...",
+            "pending"
+          );
+
+          const endpoint = action === "block"
+            ? "/api/block-domain"
+            : "/api/unblock-domain";
+
+          const response = await fetch(endpoint, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              domain,
+              reason,
+              source: "missive"
+            })
+          });
+
+          let result;
+
+          try {
+            result = await response.json();
+          } catch {
+            throw new Error(
+              "The server returned an invalid response."
+            );
+          }
+
+          if (action === "block") {
+            if (
+              !response.ok ||
+              result.success !== true ||
+              result.blocked !== true
+            ) {
+              throw new Error(
+                result.message ||
+                "Domain blocking could not be confirmed."
+              );
+            }
+
+            if (result.alreadyBlocked === true) {
+              showStatus(
+                domain +
+                " is already in the Cloudflare block list.",
+                "warning"
+              );
+            } else {
+              showStatus(
+                domain +
+                " was successfully added to Cloudflare Zero Trust.",
+                "success"
+              );
+            }
+          } else {
+            if (
+              !response.ok ||
+              result.success !== true ||
+              result.unblocked !== true
+            ) {
+              throw new Error(
+                result.message ||
+                "Domain unblocking could not be confirmed."
+              );
+            }
+
+            if (result.alreadyUnblocked === true) {
+              showStatus(
+                domain +
+                " is not present in the automation block list.",
+                "warning"
+              );
+            } else {
+              showStatus(
+                domain +
+                " was successfully removed from the automation block list.",
+                "success"
+              );
+            }
+          }
+
+        } catch (error) {
+          showStatus(
+            "Error: " + error.message,
+            "error"
+          );
+        } finally {
+          submitting = false;
+
+          button.disabled =
+            currentAction === "unblock" &&
+            !UNBLOCK_ENABLED;
+        }
       }
-    });
+    );
+
+    selectAction("block");
   </script>
 </body>
 </html>
