@@ -26,7 +26,9 @@
       box-shadow: 0 2px 12px rgba(0,0,0,.08);
     }
 
-    h2 { margin-top: 0; }
+    h2 {
+      margin-top: 0;
+    }
 
     label {
       display: block;
@@ -63,6 +65,23 @@
     #status {
       margin-top: 16px;
       white-space: pre-wrap;
+      font-size: 14px;
+    }
+
+    #status.success {
+      color: #166534;
+    }
+
+    #status.warning {
+      color: #92400e;
+    }
+
+    #status.error {
+      color: #b91c1c;
+    }
+
+    #status.pending {
+      color: #475569;
     }
 
     .description {
@@ -89,6 +108,8 @@
         id="domain"
         type="text"
         placeholder="suspicious-example.com"
+        autocomplete="off"
+        spellcheck="false"
         required
       >
 
@@ -107,8 +128,11 @@
 
     </form>
 
-    <div id="status" role="status"
-         aria-live="polite"></div>
+    <div
+      id="status"
+      role="status"
+      aria-live="polite"
+    ></div>
 
   </div>
 
@@ -117,15 +141,25 @@
     const status = document.getElementById("status");
     const button = document.getElementById("blockButton");
 
+    function showStatus(message, type = "pending") {
+      status.className = type;
+      status.textContent = message;
+    }
+
     function normalizeDomain(input) {
       let domain = input.trim().toLowerCase();
 
-      if (domain.startsWith("https://") ||
-          domain.startsWith("http://")) {
+      if (
+        domain.startsWith("https://") ||
+        domain.startsWith("http://")
+      ) {
         const url = new URL(domain);
 
-        if (url.username || url.password ||
-            url.port) {
+        if (
+          url.username ||
+          url.password ||
+          url.port
+        ) {
           throw new Error("Unsupported URL.");
         }
 
@@ -148,6 +182,10 @@
     form.addEventListener("submit", async function(event) {
       event.preventDefault();
 
+      if (button.disabled) {
+        return;
+      }
+
       try {
         const domain = normalizeDomain(
           document.getElementById("domain").value
@@ -161,7 +199,7 @@
         }
 
         button.disabled = true;
-        status.textContent = "Submitting request...";
+        showStatus("Submitting request...", "pending");
 
         const response = await fetch("/api/block-domain", {
           method: "POST",
@@ -170,29 +208,50 @@
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            domain: domain,
-            reason: reason,
+            domain,
+            reason,
             source: "missive"
           })
         });
 
-        const result = await response.json();
+        let result;
 
-        if (!response.ok || !result.success) {
+        try {
+          result = await response.json();
+        } catch {
           throw new Error(
-            result.message || "Unable to block domain."
+            "The server returned an invalid response."
           );
         }
 
-        status.textContent =
-          result.status === "already_exists"
-            ? domain + " is already blocked."
-            : result.status === "added"
-              ? domain + " was added to Cloudflare."
-              : "Request received; blocking not yet confirmed.";
+        if (
+          !response.ok ||
+          result.success !== true ||
+          result.blocked !== true
+        ) {
+          throw new Error(
+            result.message ||
+            "Domain blocking could not be confirmed."
+          );
+        }
+
+        if (result.alreadyBlocked === true) {
+          showStatus(
+            domain + " is already in the Cloudflare block list.",
+            "warning"
+          );
+        } else {
+          showStatus(
+            domain + " was successfully added to Cloudflare Zero Trust.",
+            "success"
+          );
+        }
 
       } catch (error) {
-        status.textContent = "Error: " + error.message;
+        showStatus(
+          "Error: " + error.message,
+          "error"
+        );
       } finally {
         button.disabled = false;
       }
