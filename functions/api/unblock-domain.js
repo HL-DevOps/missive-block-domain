@@ -1,14 +1,4 @@
 
-const PROTECTED_DOMAINS = [
-  "gmail.com",
-  "hotmail.com",
-  "highlightmotor.com",
-  "cloudflare.com",
-  "missiveapp.com",
-  "microsoft.com",
-  "google.com"
-];
-
 function jsonResponse(data, status = 200) {
   return Response.json(data, {
     status,
@@ -175,25 +165,13 @@ async function verifyAccess(request, env) {
   }
 }
 
-function validateDomain(domain) {
-  return (
-    domain.length <= 253 &&
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)
-  );
-}
-
-function isProtectedDomain(domain) {
-  return PROTECTED_DOMAINS.some(
-    protectedDomain =>
-      domain === protectedDomain ||
-      domain.endsWith("." + protectedDomain)
-  );
-}
-
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // 1. Verify Cloudflare Access authentication.
+  // ------------------------------------
+  // 1. Verify Cloudflare Access
+  // ------------------------------------
+
   const access = await verifyAccess(request, env);
 
   if (!access.authorized) {
@@ -204,7 +182,10 @@ export async function onRequestPost(context) {
     }, access.status);
   }
 
-  // 2. Reuse the existing n8n webhook configuration.
+  // ------------------------------------
+  // 2. Verify n8n configuration
+  // ------------------------------------
+
   if (
     !env.N8N_WEBHOOK_URL ||
     !env.N8N_AUTH_HEADER_NAME ||
@@ -217,11 +198,29 @@ export async function onRequestPost(context) {
     }, 503);
   }
 
-  // 3. Read submitted JSON.
+  // ------------------------------------
+  // 3. Read JSON with size protection
+  // ------------------------------------
+
   let body;
 
   try {
-    body = await request.json();
+    const maxBodyBytes = 16 * 1024;
+
+    const rawBody = await request.arrayBuffer();
+
+    if (rawBody.byteLength > maxBodyBytes) {
+      return jsonResponse({
+        success: false,
+        unblocked: false,
+        message: "Request body too large"
+      }, 413);
+    }
+
+    body = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true })
+        .decode(rawBody)
+    );
 
     if (
       !body ||
@@ -230,6 +229,7 @@ export async function onRequestPost(context) {
     ) {
       throw new Error("Invalid request body");
     }
+
   } catch {
     return jsonResponse({
       success: false,
@@ -238,14 +238,25 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
+  // ------------------------------------
+  // 4. Normalize request data
+  // ------------------------------------
+
   const domain = String(body.domain ?? "")
     .trim()
     .toLowerCase()
     .replace(/\.$/, "");
 
-  const reason = String(body.reason ?? "").trim();
+  const reason = String(body.reason ?? "")
+    .trim();
 
-  // Unblock endpoint only accepts unblocking.
+  // ------------------------------------
+  // 5. Enforce endpoint action
+  // ------------------------------------
+
+  // This endpoint only accepts Unblock requests.
+  // Missing action defaults to unblock.
+
   const action = String(body.action ?? "unblock")
     .trim()
     .toLowerCase();
@@ -259,40 +270,17 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  // 4. Validate domain.
-  if (!validateDomain(domain)) {
-    return jsonResponse({
-      success: false,
-      unblocked: false,
-      domain,
-      message: "Invalid domain"
-    }, 400);
-  }
+  // ------------------------------------
+  // 6. Forward request to n8n
+  // ------------------------------------
 
-  // 5. Validate free-text reason.
-  if (
-    reason.length < 5 ||
-    reason.length > 500
-  ) {
-    return jsonResponse({
-      success: false,
-      unblocked: false,
-      domain,
-      message: "Reason must contain between 5 and 500 characters"
-    }, 400);
-  }
+  // Domain format, reason validation,
+  // protected-domain checks, and rejection
+  // auditing are handled by n8n.
+  //
+  // requestedBy is taken ONLY from the
+  // verified Cloudflare Access JWT.
 
-  // 6. Preserve protected-domain safeguards.
-  if (isProtectedDomain(domain)) {
-    return jsonResponse({
-      success: false,
-      unblocked: false,
-      domain,
-      message: "Protected domain - operation prohibited"
-    }, 403);
-  }
-
-  // 7. Forward to the SAME existing n8n webhook.
   try {
     const upstream = await fetch(
       env.N8N_WEBHOOK_URL,
@@ -314,10 +302,23 @@ export async function onRequestPost(context) {
       }
     );
 
+    // ------------------------------------
+    // 7. Read n8n response
+    // ------------------------------------
+
     let result;
 
     try {
       result = await upstream.json();
+
+      if (
+        !result ||
+        typeof result !== "object" ||
+        Array.isArray(result)
+      ) {
+        throw new Error("Invalid response structure");
+      }
+
     } catch {
       return jsonResponse({
         success: false,
@@ -327,26 +328,34 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 8. Confirm removal from Cloudflare.
+    // ------------------------------------
+    // 8. Confirm successful unblocking
+    // ------------------------------------
+
     if (
       upstream.ok &&
       result.success === true &&
       result.unblocked === true &&
       result.domain === domain
     ) {
+      const alreadyUnblocked =
+        result.alreadyUnblocked === true;
+
       return jsonResponse({
         success: true,
         unblocked: true,
         domain,
-        alreadyUnblocked:
-          result.alreadyUnblocked === true,
-        message: result.alreadyUnblocked === true
+        alreadyUnblocked,
+        message: alreadyUnblocked
           ? "Domain is not present in the automation block list"
           : "Domain successfully removed from the automation block list"
       }, 200);
     }
 
-    // 9. Handle rejected requests.
+    // ------------------------------------
+    // 9. Handle n8n rejections
+    // ------------------------------------
+
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -355,11 +364,16 @@ export async function onRequestPost(context) {
         success: false,
         unblocked: false,
         domain,
-        message: typeof result.message === "string"
-          ? result.message
-          : "Domain unblocking request rejected"
+        message:
+          typeof result.message === "string"
+            ? result.message
+            : "Domain unblocking request rejected"
       }, upstream.status);
     }
+
+    // ------------------------------------
+    // 10. Handle upstream failures
+    // ------------------------------------
 
     return jsonResponse({
       success: false,
