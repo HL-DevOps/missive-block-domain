@@ -9,13 +9,6 @@ const PROTECTED_DOMAINS = [
   "google.com"
 ];
 
-const ALLOWED_REASONS = new Set([
-  "False positive",
-  "Approved by InfoSec",
-  "No longer a threat",
-  "Other"
-]);
-
 function jsonResponse(data, status = 200) {
   return Response.json(data, {
     status,
@@ -253,7 +246,7 @@ export async function onRequestPost(context) {
 
   const reason = String(body.reason ?? "").trim();
 
-  // 4. Validate domain and reason.
+  // 4. Validate domain.
   if (!validateDomain(domain)) {
     return jsonResponse({
       success: false,
@@ -263,16 +256,20 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  if (!ALLOWED_REASONS.has(reason)) {
+  // 5. Validate manually entered reason.
+  if (
+    reason.length < 5 ||
+    reason.length > 500
+  ) {
     return jsonResponse({
       success: false,
       unblocked: false,
       domain,
-      message: "Invalid unblock reason"
+      message: "Reason must contain between 5 and 500 characters"
     }, 400);
   }
 
-  // 5. Preserve existing protected-domain safeguards.
+  // 6. Preserve protected-domain safeguards.
   if (isProtectedDomain(domain)) {
     return jsonResponse({
       success: false,
@@ -282,7 +279,7 @@ export async function onRequestPost(context) {
     }, 403);
   }
 
-  // 6. Forward approved unblock request to n8n.
+  // 7. Forward approved unblock request to n8n.
   try {
     const upstream = await fetch(
       env.N8N_UNBLOCK_WEBHOOK_URL,
@@ -298,15 +295,13 @@ export async function onRequestPost(context) {
           reason,
           source: "missive",
           action: "unblock",
-
-          // Verified Cloudflare Access user.
           requestedBy: access.email
         }),
         signal: AbortSignal.timeout(20000)
       }
     );
 
-    // 7. Read and validate the n8n response.
+    // 8. Read and validate the n8n response.
     let result;
 
     try {
@@ -320,7 +315,7 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 8. Successful removal or already-unblocked entry.
+    // 9. Successful removal or already-unblocked entry.
     if (
       upstream.ok &&
       result.success === true &&
@@ -339,7 +334,7 @@ export async function onRequestPost(context) {
       }, 200);
     }
 
-    // 9. Preserve explicit n8n rejection.
+    // 10. Preserve explicit n8n rejection.
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -354,7 +349,7 @@ export async function onRequestPost(context) {
       }, upstream.status);
     }
 
-    // 10. Handle all other upstream failures.
+    // 11. Handle all other upstream failures.
     return jsonResponse({
       success: false,
       unblocked: false,
