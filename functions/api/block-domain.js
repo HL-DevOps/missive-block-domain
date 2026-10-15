@@ -1,13 +1,4 @@
 
-const PROTECTED_DOMAINS = [
-  "gmail.com",
-  "hotmail.com",
-  "highlightmotor.com",
-  "cloudflare.com",
-  "missiveapp.com",
-  "microsoft.com",
-  "google.com"
-];
 
 function jsonResponse(data, status = 200) {
   return Response.json(data, {
