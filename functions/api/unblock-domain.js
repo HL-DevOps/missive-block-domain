@@ -157,7 +157,7 @@ async function verifyAccess(request, env) {
       return {
         authorized: false,
         status: 403,
-        message: "Not authorized to unblock domains"
+        message: "Not authorized to manage domains"
       };
     }
 
@@ -193,7 +193,7 @@ function isProtectedDomain(domain) {
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // 1. Authenticate user through Cloudflare Access.
+  // 1. Verify Cloudflare Access authentication.
   const access = await verifyAccess(request, env);
 
   if (!access.authorized) {
@@ -204,9 +204,9 @@ export async function onRequestPost(context) {
     }, access.status);
   }
 
-  // 2. Verify n8n configuration.
+  // 2. Reuse the existing n8n webhook configuration.
   if (
-    !env.N8N_UNBLOCK_WEBHOOK_URL ||
+    !env.N8N_WEBHOOK_URL ||
     !env.N8N_AUTH_HEADER_NAME ||
     !env.N8N_AUTH_HEADER_VALUE
   ) {
@@ -217,7 +217,7 @@ export async function onRequestPost(context) {
     }, 503);
   }
 
-  // 3. Read submitted JSON payload.
+  // 3. Read submitted JSON.
   let body;
 
   try {
@@ -230,7 +230,6 @@ export async function onRequestPost(context) {
     ) {
       throw new Error("Invalid request body");
     }
-
   } catch {
     return jsonResponse({
       success: false,
@@ -246,6 +245,20 @@ export async function onRequestPost(context) {
 
   const reason = String(body.reason ?? "").trim();
 
+  // Unblock endpoint only accepts unblocking.
+  const action = String(body.action ?? "unblock")
+    .trim()
+    .toLowerCase();
+
+  if (action !== "unblock") {
+    return jsonResponse({
+      success: false,
+      unblocked: false,
+      domain,
+      message: "Invalid action for unblock endpoint"
+    }, 400);
+  }
+
   // 4. Validate domain.
   if (!validateDomain(domain)) {
     return jsonResponse({
@@ -256,7 +269,7 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  // 5. Validate manually entered reason.
+  // 5. Validate free-text reason.
   if (
     reason.length < 5 ||
     reason.length > 500
@@ -279,10 +292,10 @@ export async function onRequestPost(context) {
     }, 403);
   }
 
-  // 7. Forward approved unblock request to n8n.
+  // 7. Forward to the SAME existing n8n webhook.
   try {
     const upstream = await fetch(
-      env.N8N_UNBLOCK_WEBHOOK_URL,
+      env.N8N_WEBHOOK_URL,
       {
         method: "POST",
         headers: {
@@ -293,15 +306,14 @@ export async function onRequestPost(context) {
         body: JSON.stringify({
           domain,
           reason,
-          source: "missive",
           action: "unblock",
+          source: "missive",
           requestedBy: access.email
         }),
         signal: AbortSignal.timeout(20000)
       }
     );
 
-    // 8. Read and validate the n8n response.
     let result;
 
     try {
@@ -315,7 +327,7 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 9. Successful removal or already-unblocked entry.
+    // 8. Confirm removal from Cloudflare.
     if (
       upstream.ok &&
       result.success === true &&
@@ -330,11 +342,11 @@ export async function onRequestPost(context) {
           result.alreadyUnblocked === true,
         message: result.alreadyUnblocked === true
           ? "Domain is not present in the automation block list"
-          : "Domain successfully removed from Cloudflare Zero Trust"
+          : "Domain successfully removed from the automation block list"
       }, 200);
     }
 
-    // 10. Preserve explicit n8n rejection.
+    // 9. Handle rejected requests.
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -349,7 +361,6 @@ export async function onRequestPost(context) {
       }, upstream.status);
     }
 
-    // 11. Handle all other upstream failures.
     return jsonResponse({
       success: false,
       unblocked: false,
