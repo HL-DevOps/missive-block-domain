@@ -157,7 +157,7 @@ async function verifyAccess(request, env) {
       return {
         authorized: false,
         status: 403,
-        message: "Not authorized to block domains"
+        message: "Not authorized to manage domains"
       };
     }
 
@@ -193,7 +193,7 @@ function isProtectedDomain(domain) {
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // 1. Authenticate through Cloudflare Access.
+  // 1. Verify Cloudflare Access authentication.
   const access = await verifyAccess(request, env);
 
   if (!access.authorized) {
@@ -204,7 +204,7 @@ export async function onRequestPost(context) {
     }, access.status);
   }
 
-  // 2. Verify server-side n8n configuration.
+  // 2. Verify existing n8n configuration.
   if (
     !env.N8N_WEBHOOK_URL ||
     !env.N8N_AUTH_HEADER_NAME ||
@@ -245,6 +245,21 @@ export async function onRequestPost(context) {
 
   const reason = String(body.reason ?? "").trim();
 
+  // The block endpoint only accepts blocking.
+  // Legacy requests without an action remain supported.
+  const action = String(body.action ?? "block")
+    .trim()
+    .toLowerCase();
+
+  if (action !== "block") {
+    return jsonResponse({
+      success: false,
+      blocked: false,
+      domain,
+      message: "Invalid action for block endpoint"
+    }, 400);
+  }
+
   // 4. Validate domain.
   if (!validateDomain(domain)) {
     return jsonResponse({
@@ -255,7 +270,7 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  // 5. Validate manually entered reason.
+  // 5. Validate free-text reason.
   if (
     reason.length < 5 ||
     reason.length > 500
@@ -268,7 +283,7 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  // 6. Reject protected domains and subdomains.
+  // 6. Protect critical domains.
   if (isProtectedDomain(domain)) {
     return jsonResponse({
       success: false,
@@ -278,7 +293,7 @@ export async function onRequestPost(context) {
     }, 403);
   }
 
-  // 7. Forward approved request to n8n.
+  // 7. Send to the existing n8n webhook.
   try {
     const upstream = await fetch(
       env.N8N_WEBHOOK_URL,
@@ -292,6 +307,7 @@ export async function onRequestPost(context) {
         body: JSON.stringify({
           domain,
           reason,
+          action: "block",
           source: "missive",
           requestedBy: access.email
         }),
@@ -299,7 +315,6 @@ export async function onRequestPost(context) {
       }
     );
 
-    // 8. Read and validate n8n response.
     let result;
 
     try {
@@ -313,7 +328,7 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 9. Successful block or existing entry.
+    // 8. Confirm Cloudflare blocking.
     if (
       upstream.ok &&
       result.success === true &&
@@ -331,7 +346,7 @@ export async function onRequestPost(context) {
       }, 200);
     }
 
-    // 10. Preserve explicit rejection from n8n.
+    // 9. Handle rejected requests.
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -346,7 +361,6 @@ export async function onRequestPost(context) {
       }, upstream.status);
     }
 
-    // 11. Handle other upstream failures.
     return jsonResponse({
       success: false,
       blocked: false,
