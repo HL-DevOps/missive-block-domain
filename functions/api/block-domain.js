@@ -9,14 +9,6 @@ const PROTECTED_DOMAINS = [
   "google.com"
 ];
 
-const ALLOWED_REASONS = new Set([
-  "Phishing",
-  "Malware",
-  "Spam",
-  "Company policy",
-  "Other"
-]);
-
 function jsonResponse(data, status = 200) {
   return Response.json(data, {
     status,
@@ -253,7 +245,7 @@ export async function onRequestPost(context) {
 
   const reason = String(body.reason ?? "").trim();
 
-  // 4. Validate domain and reason.
+  // 4. Validate domain.
   if (!validateDomain(domain)) {
     return jsonResponse({
       success: false,
@@ -263,16 +255,20 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  if (!ALLOWED_REASONS.has(reason)) {
+  // 5. Validate manually entered reason.
+  if (
+    reason.length < 5 ||
+    reason.length > 500
+  ) {
     return jsonResponse({
       success: false,
       blocked: false,
       domain,
-      message: "Invalid reason"
+      message: "Reason must contain between 5 and 500 characters"
     }, 400);
   }
 
-  // 5. Reject protected domains and subdomains.
+  // 6. Reject protected domains and subdomains.
   if (isProtectedDomain(domain)) {
     return jsonResponse({
       success: false,
@@ -282,7 +278,7 @@ export async function onRequestPost(context) {
     }, 403);
   }
 
-  // 6. Forward the request to n8n.
+  // 7. Forward approved request to n8n.
   try {
     const upstream = await fetch(
       env.N8N_WEBHOOK_URL,
@@ -297,15 +293,13 @@ export async function onRequestPost(context) {
           domain,
           reason,
           source: "missive",
-
-          // Verified Cloudflare Access identity.
           requestedBy: access.email
         }),
         signal: AbortSignal.timeout(20000)
       }
     );
 
-    // 7. Read and validate n8n response.
+    // 8. Read and validate n8n response.
     let result;
 
     try {
@@ -319,7 +313,7 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 8. Successful block or existing entry.
+    // 9. Successful block or existing entry.
     if (
       upstream.ok &&
       result.success === true &&
@@ -337,7 +331,7 @@ export async function onRequestPost(context) {
       }, 200);
     }
 
-    // 9. Preserve explicit rejection from n8n.
+    // 10. Preserve explicit rejection from n8n.
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -352,7 +346,7 @@ export async function onRequestPost(context) {
       }, upstream.status);
     }
 
-    // 10. Handle other upstream failures.
+    // 11. Handle other upstream failures.
     return jsonResponse({
       success: false,
       blocked: false,
