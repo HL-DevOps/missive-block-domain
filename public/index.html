@@ -36,16 +36,23 @@
       font-weight: bold;
     }
 
-    input, select, button {
+    input, textarea, button {
       width: 100%;
       padding: 12px;
       box-sizing: border-box;
       border-radius: 6px;
       font-size: 14px;
+      font-family: Arial, sans-serif;
     }
 
-    input, select {
+    input, textarea {
       border: 1px solid #cbd5e1;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 100px;
+      line-height: 1.5;
     }
 
     button {
@@ -128,6 +135,19 @@
       color: #475569;
       line-height: 1.5;
     }
+
+    .field-hint {
+      margin-top: 5px;
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    .character-count {
+      text-align: right;
+      margin-top: 5px;
+      font-size: 12px;
+      color: #64748b;
+    }
   </style>
 </head>
 
@@ -176,15 +196,28 @@
         required
       >
 
-      <label for="reason">Reason</label>
+      <label for="reason">
+        Reason
+      </label>
 
-      <select id="reason" required>
-        <option>Phishing</option>
-        <option>Malware</option>
-        <option>Spam</option>
-        <option>Company policy</option>
-        <option>Other</option>
-      </select>
+      <textarea
+        id="reason"
+        rows="4"
+        minlength="5"
+        maxlength="500"
+        placeholder="Explain why this domain should be blocked..."
+        required
+      ></textarea>
+
+      <div class="field-hint">
+        Required. Enter a minimum of 5 characters.
+      </div>
+
+      <div
+        id="characterCount"
+        class="character-count">
+        0 / 500 characters
+      </div>
 
       <div
         class="notice"
@@ -210,9 +243,14 @@
   </div>
 
   <script>
-    const form = document.getElementById("domainForm");
-    const status = document.getElementById("status");
-    const button = document.getElementById("submitButton");
+    const form =
+      document.getElementById("domainForm");
+
+    const status =
+      document.getElementById("status");
+
+    const button =
+      document.getElementById("submitButton");
 
     const pageTitle =
       document.getElementById("pageTitle");
@@ -220,8 +258,11 @@
     const description =
       document.getElementById("description");
 
-    const reasonSelect =
+    const reasonField =
       document.getElementById("reason");
+
+    const characterCount =
+      document.getElementById("characterCount");
 
     const blockSelector =
       document.getElementById("selectBlock");
@@ -232,43 +273,26 @@
     const actionNotice =
       document.getElementById("actionNotice");
 
-    // Enable only after the secure unblock
-    // backend and n8n workflow are tested.
+    // Change to true only after the
+    // unblock backend is fully tested.
     const UNBLOCK_ENABLED = false;
 
     let currentAction = "block";
     let submitting = false;
 
-    const reasons = {
-      block: [
-        "Phishing",
-        "Malware",
-        "Spam",
-        "Company policy",
-        "Other"
-      ],
-      unblock: [
-        "False positive",
-        "Approved by InfoSec",
-        "No longer a threat",
-        "Other"
-      ]
-    };
-
-    function showStatus(message, type = "pending") {
+    function showStatus(
+      message,
+      type = "pending"
+    ) {
       status.className = type;
       status.textContent = message;
     }
 
-    function updateReasons(action) {
-      reasonSelect.replaceChildren();
+    function updateCharacterCount() {
+      const length = reasonField.value.length;
 
-      for (const reason of reasons[action]) {
-        const option = document.createElement("option");
-        option.value = reason;
-        option.textContent = reason;
-        reasonSelect.appendChild(option);
-      }
+      characterCount.textContent =
+        length + " / 500 characters";
     }
 
     function selectAction(action) {
@@ -280,35 +304,42 @@
 
       const isBlock = action === "block";
 
-      pageTitle.textContent =
-        isBlock ? "Block Domain" : "Unblock Domain";
+      pageTitle.textContent = isBlock
+        ? "Block Domain"
+        : "Unblock Domain";
 
       description.textContent = isBlock
         ? "Add a domain to the company Cloudflare Gateway DNS blocklist."
         : "Remove a domain from the dedicated Blocked by Automation list.";
 
       blockSelector.classList.toggle(
-        "active", isBlock
+        "active",
+        isBlock
       );
 
       unblockSelector.classList.toggle(
-        "active", !isBlock
+        "active",
+        !isBlock
       );
 
       blockSelector.classList.toggle(
-        "block", isBlock
+        "block",
+        isBlock
       );
 
       unblockSelector.classList.toggle(
-        "unblock", !isBlock
+        "unblock",
+        !isBlock
       );
 
       blockSelector.setAttribute(
-        "aria-pressed", String(isBlock)
+        "aria-pressed",
+        String(isBlock)
       );
 
       unblockSelector.setAttribute(
-        "aria-pressed", String(!isBlock)
+        "aria-pressed",
+        String(!isBlock)
       );
 
       button.textContent = isBlock
@@ -316,10 +347,13 @@
         : "Unblock Domain";
 
       button.classList.toggle(
-        "unblock", !isBlock
+        "unblock",
+        !isBlock
       );
 
-      updateReasons(action);
+      reasonField.placeholder = isBlock
+        ? "Explain why this domain should be blocked..."
+        : "Explain why this domain should be unblocked...";
 
       actionNotice.hidden = isBlock;
 
@@ -333,8 +367,7 @@
 
       if (!isBlock && !UNBLOCK_ENABLED) {
         showStatus(
-          "Unblock functionality is being configured. " +
-          "Requests are not enabled yet.",
+          "Unblock functionality is being configured. Requests are not enabled yet.",
           "warning"
         );
       } else {
@@ -356,7 +389,9 @@
           url.password ||
           url.port
         ) {
-          throw new Error("Unsupported URL.");
+          throw new Error(
+            "Unsupported URL."
+          );
         }
 
         domain = url.hostname;
@@ -369,10 +404,27 @@
         /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain);
 
       if (!valid) {
-        throw new Error("Enter a valid domain.");
+        throw new Error(
+          "Enter a valid domain."
+        );
       }
 
       return domain;
+    }
+
+    function validateReason(input) {
+      const reason = input.trim();
+
+      if (
+        reason.length < 5 ||
+        reason.length > 500
+      ) {
+        throw new Error(
+          "Reason must contain between 5 and 500 characters."
+        );
+      }
+
+      return reason;
     }
 
     blockSelector.addEventListener(
@@ -383,6 +435,11 @@
     unblockSelector.addEventListener(
       "click",
       () => selectAction("unblock")
+    );
+
+    reasonField.addEventListener(
+      "input",
+      updateCharacterCount
     );
 
     form.addEventListener(
@@ -412,17 +469,19 @@
             document.getElementById("domain").value
           );
 
-          const reason = reasonSelect.value;
+          const reason = validateReason(
+            reasonField.value
+          );
 
           const actionLabel = action === "block"
             ? "Block"
             : "Unblock";
 
-          if (
-            !confirm(
-              actionLabel + " " + domain + "?"
-            )
-          ) {
+          const confirmationMessage =
+            actionLabel + " " + domain +
+            "?\n\nReason: " + reason;
+
+          if (!confirm(confirmationMessage)) {
             return;
           }
 
@@ -438,18 +497,21 @@
             ? "/api/block-domain"
             : "/api/unblock-domain";
 
-          const response = await fetch(endpoint, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              domain,
-              reason,
-              source: "missive"
-            })
-          });
+          const response = await fetch(
+            endpoint,
+            {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                domain,
+                reason,
+                source: "missive"
+              })
+            }
+          );
 
           let result;
 
@@ -486,6 +548,7 @@
                 "success"
               );
             }
+
           } else {
             if (
               !response.ok ||
@@ -518,6 +581,7 @@
             "Error: " + error.message,
             "error"
           );
+
         } finally {
           submitting = false;
 
@@ -528,6 +592,7 @@
       }
     );
 
+    updateCharacterCount();
     selectAction("block");
   </script>
 </body>
