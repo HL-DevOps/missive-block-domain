@@ -47,8 +47,11 @@ async function verifyAccess(request, env) {
     "Cf-Access-Jwt-Assertion"
   );
 
-  if (!token || !env.ACCESS_AUD ||
-      !env.ACCESS_TEAM_DOMAIN) {
+  if (
+    !token ||
+    !env.ACCESS_AUD ||
+    !env.ACCESS_TEAM_DOMAIN
+  ) {
     return {
       authorized: false,
       status: 401,
@@ -198,7 +201,7 @@ function isProtectedDomain(domain) {
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // 1. Authenticate the user through Cloudflare Access.
+  // 1. Authenticate through Cloudflare Access.
   const access = await verifyAccess(request, env);
 
   if (!access.authorized) {
@@ -209,7 +212,7 @@ export async function onRequestPost(context) {
     }, access.status);
   }
 
-  // 2. Verify the server-side n8n configuration.
+  // 2. Verify server-side n8n configuration.
   if (
     !env.N8N_WEBHOOK_URL ||
     !env.N8N_AUTH_HEADER_NAME ||
@@ -222,14 +225,17 @@ export async function onRequestPost(context) {
     }, 503);
   }
 
-  // 3. Read the submitted JSON payload.
+  // 3. Read submitted JSON.
   let body;
 
   try {
     body = await request.json();
 
-    if (!body || typeof body !== "object" ||
-        Array.isArray(body)) {
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body)
+    ) {
       throw new Error("Invalid request body");
     }
   } catch {
@@ -276,7 +282,7 @@ export async function onRequestPost(context) {
     }, 403);
   }
 
-  // 6. Forward the approved request to n8n.
+  // 6. Forward the request to n8n.
   try {
     const upstream = await fetch(
       env.N8N_WEBHOOK_URL,
@@ -290,13 +296,16 @@ export async function onRequestPost(context) {
         body: JSON.stringify({
           domain,
           reason,
-          source: "missive"
+          source: "missive",
+
+          // Verified Cloudflare Access identity.
+          requestedBy: access.email
         }),
         signal: AbortSignal.timeout(20000)
       }
     );
 
-    // 7. Read and validate the n8n response.
+    // 7. Read and validate n8n response.
     let result;
 
     try {
@@ -310,7 +319,7 @@ export async function onRequestPost(context) {
       }, 502);
     }
 
-    // 8. Handle a successful block or an existing entry.
+    // 8. Successful block or existing entry.
     if (
       upstream.ok &&
       result.success === true &&
@@ -328,7 +337,7 @@ export async function onRequestPost(context) {
       }, 200);
     }
 
-    // 9. Preserve an explicit rejection from n8n.
+    // 9. Preserve explicit rejection from n8n.
     if (
       upstream.status === 400 ||
       upstream.status === 403
@@ -343,7 +352,7 @@ export async function onRequestPost(context) {
       }, upstream.status);
     }
 
-    // 10. Handle all other upstream failures.
+    // 10. Handle other upstream failures.
     return jsonResponse({
       success: false,
       blocked: false,
